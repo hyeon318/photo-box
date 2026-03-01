@@ -1,0 +1,26 @@
+{
+  "name": "photo-box",
+  "version": "1.0.0",
+  "description": "인생네컷 스타일 데스크톱 포토부스",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview"
+  },
+  "dependencies": {
+    "fs-extra": "^11.2.0",
+    "lucide-react": "^0.344.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.19",
+    "electron": "^29.1.4",
+    "electron-vite": "^2.1.0",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.3",
+    "vite": "^5.2.6"
+  }
+}
