@@ -28,6 +28,23 @@ export const config = {
   photoMargin: 18,         // gap between photos and frame edge (px)
   footerHeight: 110,       // reserved space at bottom for date/logo
 
+  // ── Background effect options ─────────────────────────────────────────────
+  bgEffects: [
+    { id: 'none',  label: '없음' },
+    { id: 'solid', label: '단색' },
+    { id: 'blur',  label: '블러' },
+  ],
+
+  // ── Photo filter presets ─────────────────────────────────────────────────
+  // Canvas ctx.filter 문자열로 사용됨. 'none' = 필터 없음.
+  photoFilters: [
+    { id: 'original', label: 'Original', filter: 'none' },
+    { id: 'bright',   label: '뽀샤시',   filter: 'brightness(1.15) contrast(1.1) saturate(1.1)' },
+    { id: 'bw',       label: '흑백',     filter: 'grayscale(100%) contrast(1.2)' },
+    { id: 'warm',     label: '빈티지',   filter: 'sepia(25%) brightness(1.1) saturate(1.3)' },
+    { id: 'cool',     label: '청량',     filter: 'hue-rotate(-10deg) saturate(1.2) brightness(1.05)' },
+  ],
+
   // ── Frame colour palette ──────────────────────────────────────────────────
   frameColors: [
     { id: 'white',    label: '화이트',  value: '#FFFFFF' },

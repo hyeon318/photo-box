@@ -7,11 +7,15 @@ export default function SelectStep({ photos, settings, onComplete, onReshoot }) 
   const { selectCount, layout } = settings
 
   const [selected,   setSelected]   = useState([])   // ordered indices
-  const [frameColor, setFrameColor] = useState(config.frameColors[0])
+  // SetupStep에서 선택한 색으로 초기화, SelectStep에서 마지막으로 조정 가능
+  const [frameColor, setFrameColor] = useState(settings.frameColor ?? config.frameColors[0])
   const [previewUrl, setPreviewUrl] = useState(null)
   const [composing,  setComposing]  = useState(false)
 
-  // Regenerate preview whenever selection or colour changes
+  // bgEffect는 SetupStep에서 결정된 값을 그대로 사용 (SelectStep에서 변경 불가)
+  const bgEffect = settings.bgEffect || 'solid'
+
+  // Regenerate preview whenever selection, colour, or effect changes
   useEffect(() => {
     if (selected.length < selectCount) {
       setPreviewUrl(null)
@@ -19,7 +23,7 @@ export default function SelectStep({ photos, settings, onComplete, onReshoot }) 
     }
     let cancelled = false
     const selectedUrls = selected.map(i => photos[i])
-    compositePhotos(selectedUrls, layout, frameColor.value).then(url => {
+    compositePhotos(selectedUrls, layout, frameColor.value, bgEffect).then(url => {
       if (!cancelled) setPreviewUrl(url)
     })
     return () => { cancelled = true }
@@ -37,7 +41,7 @@ export default function SelectStep({ photos, settings, onComplete, onReshoot }) 
     if (selected.length < selectCount || composing) return
     setComposing(true)
     const selectedUrls = selected.map(i => photos[i])
-    const composite = await compositePhotos(selectedUrls, layout, frameColor.value)
+    const composite = await compositePhotos(selectedUrls, layout, frameColor.value, bgEffect)
     setComposing(false)
     onComplete(composite)
   }
@@ -92,28 +96,31 @@ export default function SelectStep({ photos, settings, onComplete, onReshoot }) 
           })}
         </div>
 
-        {/* Frame colour picker */}
-        <div>
-          <div className="flex items-center gap-2 mb-3">
-            <Palette size={14} className="text-gray-400" />
-            <span className="text-sm font-semibold text-gray-300">프레임 색상</span>
+        {/* Frame colour picker — 단색 모드에서만 표시 */}
+        {bgEffect === 'solid' && (
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <Palette size={14} className="text-gray-400" />
+              <span className="text-sm font-semibold text-gray-300">배경 색상</span>
+              <span className="ml-auto text-xs text-gray-500">단색 배경</span>
+            </div>
+            <div className="flex gap-2.5">
+              {config.frameColors.map(color => (
+                <button
+                  key={color.id}
+                  onClick={() => setFrameColor(color)}
+                  title={color.label}
+                  className={`w-9 h-9 rounded-full border-2 transition-all ${
+                    frameColor.id === color.id
+                      ? 'border-pink-500 scale-110 shadow-md shadow-pink-500/30'
+                      : 'border-gray-700 hover:border-gray-400'
+                  }`}
+                  style={{ backgroundColor: color.value }}
+                />
+              ))}
+            </div>
           </div>
-          <div className="flex gap-2.5">
-            {config.frameColors.map(color => (
-              <button
-                key={color.id}
-                onClick={() => setFrameColor(color)}
-                title={color.label}
-                className={`w-9 h-9 rounded-full border-2 transition-all ${
-                  frameColor.id === color.id
-                    ? 'border-pink-500 scale-110 shadow-md shadow-pink-500/30'
-                    : 'border-gray-700 hover:border-gray-400'
-                }`}
-                style={{ backgroundColor: color.value }}
-              />
-            ))}
-          </div>
-        </div>
+        )}
 
         {/* Action buttons */}
         <div className="flex gap-3 mt-auto pt-2">

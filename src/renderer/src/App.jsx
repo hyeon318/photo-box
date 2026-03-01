@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Camera, Images } from 'lucide-react'
 import { config } from './config'
+import IntroScreen from './components/IntroScreen'
 import SetupStep from './components/SetupStep'
 import ShootingStep from './components/ShootingStep'
 import SelectStep from './components/SelectStep'
@@ -8,10 +9,10 @@ import ShareStep from './components/ShareStep'
 import GalleryView from './components/GalleryView'
 
 // ─── Step type ───────────────────────────────────────────────────────────────
-// 'setup' | 'shooting' | 'select' | 'share' | 'gallery'
+// 'intro' | 'setup' | 'shooting' | 'select' | 'share' | 'gallery'
 
 export default function App() {
-  const [step, setStep] = useState('setup')
+  const [step, setStep] = useState('intro')
 
   // Default to 1x4 (the classic 인생네컷 format)
   const defaultLayout = config.layouts.find(l => l.id === '1x4') ?? config.layouts[0]
@@ -22,6 +23,8 @@ export default function App() {
     intervalSeconds: config.intervalSeconds,
     countdownSeconds: config.countdownSeconds,
     layout: defaultLayout,
+    bgEffect: 'none',
+    frameColor: config.frameColors[0],
   })
 
   const [capturedPhotos, setCapturedPhotos] = useState([])   // dataUrl[]
@@ -56,8 +59,8 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-gray-950 text-white overflow-hidden">
-      {/* Top navigation bar */}
-      <header className="flex-shrink-0 flex items-center justify-between px-6 py-3 bg-gray-900/80 backdrop-blur border-b border-gray-800 z-40">
+      {/* Top navigation bar — 인트로에서는 숨김 */}
+      <header className={`flex-shrink-0 flex items-center justify-between px-6 py-3 bg-gray-900/80 backdrop-blur border-b border-gray-800 z-40 ${step === 'intro' ? 'hidden' : ''}`}>
         <button
           onClick={() => step !== 'shooting' && setStep('setup')}
           className="flex items-center gap-2 text-pink-400 font-bold text-xl hover:text-pink-300 transition-colors"
@@ -81,6 +84,10 @@ export default function App() {
 
       {/* Main content area */}
       <main className="flex-1 overflow-hidden scrollable">
+        {step === 'intro' && (
+          <IntroScreen onReady={() => setStep('setup')} />
+        )}
+
         {step === 'setup' && (
           <SetupStep defaultSettings={settings} onStart={handleStart} />
         )}

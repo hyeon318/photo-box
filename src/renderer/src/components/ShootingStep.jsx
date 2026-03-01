@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { X } from 'lucide-react'
+import { config } from '../config'
+import BackgroundBlurCamera from './BackgroundBlurCamera'
+import FilterSelector from './FilterSelector'
 
 // ─── Web Audio shutter sound ──────────────────────────────────────────────────
 function playShutter() {
@@ -26,80 +29,116 @@ function delay(ms) {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function ShootingStep({ settings, onComplete, onCancel }) {
-  const videoRef  = useRef(null)
-  const canvasRef = useRef(null)
-  const streamRef = useRef(null)
-  const stoppedRef = useRef(false)
+  // 'none' → plain webcam   'solid' | 'blur' → AI background camera
+  const isAIMode = settings.bgEffect !== 'none'
 
-  const [photos,    setPhotos]    = useState([])
-  const [shotCount, setShotCount] = useState(0)
-  const [countdown, setCountdown] = useState(null)
-  const [isFlashing, setIsFlashing] = useState(false)
-  const [phase,     setPhase]     = useState('init') // init | shooting | done
-  const [message,   setMessage]   = useState('카메라 준비 중...')
+  // AI mode: BackgroundBlurCamera ref (exposes captureFrame)
+  const aiCameraRef  = useRef(null)
+
+  // none mode: original video + canvas capture
+  const videoRef   = useRef(null)
+  const canvasRef  = useRef(null)
+  const streamRef  = useRef(null)
+
+  const cameraReadyRef = useRef(false)
+  const stoppedRef     = useRef(false)
+
+  const [photos,         setPhotos]         = useState([])
+  const [shotCount,      setShotCount]      = useState(0)
+  const [countdown,      setCountdown]      = useState(null)
+  const [isFlashing,     setIsFlashing]     = useState(false)
+  const [phase,          setPhase]          = useState('init') // init | shooting | done
+  const [message,        setMessage]        = useState('')
+  const [selectedFilter, setSelectedFilter] = useState(config.photoFilters[0])
+  // stable callback 안에서 최신 필터값을 읽기 위한 ref
+  const selectedFilterRef = useRef(config.photoFilters[0])
+  useEffect(() => { selectedFilterRef.current = selectedFilter }, [selectedFilter])
 
   const { totalShots, intervalSeconds, countdownSeconds } = settings
 
-  // Capture one frame from the video element (already mirrored via CSS)
-  const captureFrame = useCallback(() => {
+  // AI mode: called by BackgroundBlurCamera when AI model + webcam are ready
+  const handleAICameraReady = useCallback(() => {
+    cameraReadyRef.current = true
+  }, [])
+
+  // Unified capture — routes to the right implementation depending on mode
+  const captureFrame = useCallback(async () => {
+    if (isAIMode) {
+      // BackgroundBlurCamera: 다음 onResults 프레임에서 live mask로 고해상도 합성
+      return (await aiCameraRef.current?.captureFrame()) ?? null
+    }
+    // None mode: plain mirrored frame (필터 적용)
     const video  = videoRef.current
     const canvas = canvasRef.current
     if (!video || !canvas) return null
-
     canvas.width  = video.videoWidth  || 1280
     canvas.height = video.videoHeight || 720
-
     const ctx = canvas.getContext('2d')
-    // Mirror horizontally to match the preview
     ctx.translate(canvas.width, 0)
     ctx.scale(-1, 1)
+    ctx.filter = selectedFilterRef.current.filter
     ctx.drawImage(video, 0, 0)
-
+    ctx.filter = 'none'
     return canvas.toDataURL('image/png')
-  }, [])
+  }, [isAIMode])
 
   // ── Main shooting sequence ──────────────────────────────────────────────
   useEffect(() => {
-    stoppedRef.current = false
+    stoppedRef.current   = false
+    cameraReadyRef.current = false
     const capturedList = []
 
     const run = async () => {
-      // 1. Acquire camera
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
-          audio: false,
-        })
-        if (stoppedRef.current) { stream.getTracks().forEach(t => t.stop()); return }
-        streamRef.current = stream
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream
-          await videoRef.current.play()
+      // ── None mode: ShootingStep manages the camera directly ──────────────
+      if (!isAIMode) {
+        setMessage('카메라 준비 중...')
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+            audio: false,
+          })
+          if (stoppedRef.current) { stream.getTracks().forEach(t => t.stop()); return }
+          streamRef.current = stream
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream
+            await videoRef.current.play()
+          }
+          await delay(800) // brief stabilisation pause
+          cameraReadyRef.current = true
+        } catch (err) {
+          setMessage(`카메라를 열 수 없습니다: ${err.message}`)
+          return
         }
-      } catch (err) {
-        setMessage(`카메라를 열 수 없습니다: ${err.message}`)
-        return
       }
 
-      // 2. Brief pause so video is stable
-      await delay(1200)
+      // ── AI mode: wait for BackgroundBlurCamera to signal ready (max 30s) ─
+      if (isAIMode) {
+        setMessage('카메라 준비 중...')
+        const deadline = Date.now() + 30_000
+        while (!cameraReadyRef.current && !stoppedRef.current) {
+          if (Date.now() > deadline) {
+            setMessage('카메라를 시작할 수 없습니다.')
+            return
+          }
+          await delay(200)
+        }
+      }
+
       if (stoppedRef.current) return
 
       setPhase('shooting')
       setMessage('')
 
-      // 3. Shooting loop
+      // ── Shooting loop ────────────────────────────────────────────────────
       for (let i = 0; i < totalShots; i++) {
         if (stoppedRef.current) break
 
-        // Silent wait before countdown (skip on first shot)
-        if (i > 0) {
-          const silentWait = (intervalSeconds - countdownSeconds) * 1000
-          if (silentWait > 0) {
-            setMessage('다음 촬영 준비 중...')
-            await delay(silentWait)
-            setMessage('')
-          }
+        // 모든 컷(첫 번째 포함)에 동일하게 silent wait 적용
+        const silentWait = (intervalSeconds - countdownSeconds) * 1000
+        if (silentWait > 0) {
+          setMessage(i === 0 ? '촬영 준비 중...' : '다음 촬영 준비 중...')
+          await delay(silentWait)
+          setMessage('')
         }
 
         if (stoppedRef.current) break
@@ -115,7 +154,7 @@ export default function ShootingStep({ settings, onComplete, onCancel }) {
         if (stoppedRef.current) break
 
         // Shoot
-        const dataUrl = captureFrame()
+        const dataUrl = await captureFrame()
         playShutter()
         setIsFlashing(true)
         setTimeout(() => setIsFlashing(false), 180)
@@ -130,7 +169,7 @@ export default function ShootingStep({ settings, onComplete, onCancel }) {
       if (!stoppedRef.current) {
         setPhase('done')
         setMessage('촬영 완료!')
-        streamRef.current?.getTracks().forEach(t => t.stop())
+        if (!isAIMode) streamRef.current?.getTracks().forEach(t => t.stop())
         await delay(700)
         onComplete(capturedList)
       }
@@ -140,13 +179,15 @@ export default function ShootingStep({ settings, onComplete, onCancel }) {
 
     return () => {
       stoppedRef.current = true
-      streamRef.current?.getTracks().forEach(t => t.stop())
+      // none mode: stop the stream we opened
+      if (!isAIMode) streamRef.current?.getTracks().forEach(t => t.stop())
+      // AI mode: BackgroundBlurCamera handles its own cleanup on unmount
     }
   }, []) // intentional empty deps — runs once on mount
 
   const handleCancel = () => {
     stoppedRef.current = true
-    streamRef.current?.getTracks().forEach(t => t.stop())
+    if (!isAIMode) streamRef.current?.getTracks().forEach(t => t.stop())
     onCancel()
   }
 
@@ -161,16 +202,30 @@ export default function ShootingStep({ settings, onComplete, onCancel }) {
         {/* ── Camera preview (2/3 width) ── */}
         <div className="col-span-2 flex flex-col gap-3">
           <div className="relative rounded-2xl overflow-hidden bg-gray-900 aspect-video shadow-2xl">
-            <video
-              ref={videoRef}
-              autoPlay playsInline muted
-              className="w-full h-full object-cover"
-              style={{ transform: 'scaleX(-1)' }}
-            />
+
+            {/* ── AI mode: background compositing camera (solid / blur) ── */}
+            {isAIMode && (
+              <BackgroundBlurCamera
+                ref={aiCameraRef}
+                bgEffect={settings.bgEffect}
+                frameColor={settings.frameColor?.value ?? '#ffffff'}
+                onReady={handleAICameraReady}
+              />
+            )}
+
+            {/* ── None mode: plain webcam ── */}
+            {!isAIMode && (
+              <video
+                ref={videoRef}
+                autoPlay playsInline muted
+                className="w-full h-full object-cover"
+                style={{ transform: 'scaleX(-1)' }}
+              />
+            )}
 
             {/* Countdown overlay */}
             {countdown !== null && (
-              <div className="absolute inset-0 flex items-center justify-center">
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                 <div
                   key={countdown}
                   className="text-[10rem] font-black text-white drop-shadow-[0_0_40px_rgba(236,72,153,0.8)] animate-countdown-pop leading-none"
@@ -182,13 +237,13 @@ export default function ShootingStep({ settings, onComplete, onCancel }) {
 
             {/* Done overlay */}
             {phase === 'done' && (
-              <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
+              <div className="absolute inset-0 bg-black/60 flex items-center justify-center pointer-events-none">
                 <span className="text-3xl font-bold text-white">✓ 촬영 완료</span>
               </div>
             )}
 
             {/* Progress bar */}
-            <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-gray-800/70">
+            <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-gray-800/70 pointer-events-none">
               <div
                 className="h-full bg-pink-500 transition-all duration-500 ease-out"
                 style={{ width: `${(shotCount / totalShots) * 100}%` }}
@@ -229,11 +284,7 @@ export default function ShootingStep({ settings, onComplete, onCancel }) {
                 }`}
               >
                 {photos[i] ? (
-                  <img
-                    src={photos[i]}
-                    alt={`shot ${i + 1}`}
-                    className="w-full h-full object-cover"
-                  />
+                  <img src={photos[i]} alt={`shot ${i + 1}`} className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-gray-700 text-xs font-medium">
                     {i + 1}
@@ -245,7 +296,7 @@ export default function ShootingStep({ settings, onComplete, onCancel }) {
         </div>
       </div>
 
-      {/* Hidden canvas used for frame capture */}
+      {/* Hidden canvas for solid-mode frame capture */}
       <canvas ref={canvasRef} className="hidden" />
     </div>
   )

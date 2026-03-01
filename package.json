@@ -9,6 +9,7 @@
     "preview": "electron-vite preview"
   },
   "dependencies": {
+    "@mediapipe/selfie_segmentation": "^0.1.1675465747",
     "fs-extra": "^11.2.0",
     "lucide-react": "^0.344.0",
     "react": "^18.3.1",
