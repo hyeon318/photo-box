@@ -1,11 +1,14 @@
 import { app, BrowserWindow, ipcMain, shell, clipboard, nativeImage } from 'electron'
+import piexif from 'piexifjs'
 import { join } from 'path'
 import fs from 'fs-extra'
 
 // ─── Window ─────────────────────────────────────────────────────────────────
 
+let mainWindow = null   // IPC 핸들러에서 안정적으로 참조하기 위해 모듈 스코프 유지
+
 function createWindow() {
-  const win = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
     minWidth: 1024,
@@ -30,13 +33,21 @@ function createWindow() {
   })
 
   if (process.env.NODE_ENV === 'development') {
-    win.loadURL(process.env.ELECTRON_RENDERER_URL)
+    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'))
+    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 }
 
 app.whenReady().then(() => {
+  // Electron은 기본적으로 모든 권한 요청을 거부한다.
+  // Geolocation API 사용을 위해 명시적으로 허용한다.
+  const { session } = require('electron')
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    const ALLOWED = ['geolocation', 'media']
+    callback(ALLOWED.includes(permission))
+  })
+
   createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -64,13 +75,37 @@ function getTodayFolder() {
 /**
  * Save a composite photo (base64 dataURL) to Documents/PhotoBooth/YYYY-MM-DD/
  */
-ipcMain.handle('save-photo', async (_, { dataUrl, filename }) => {
+// GPS 소수점 좌표 → EXIF rational (도/분/초) 변환
+function toExifRational(decimal) {
+  const d = Math.abs(decimal)
+  const deg = Math.floor(d)
+  const minFloat = (d - deg) * 60
+  const min = Math.floor(minFloat)
+  const sec = Math.round((minFloat - min) * 60 * 1000)
+  return [[deg, 1], [min, 1], [sec, 1000]]
+}
+
+ipcMain.handle('save-photo', async (_, { dataUrl, filename, location }) => {
   try {
     const dateFolder = getTodayFolder()
     const dir = join(getPhotoBaseDir(), dateFolder)
     await fs.ensureDir(dir)
 
-    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '')
+    // 위치 정보가 있으면 JPEG EXIF에 GPS 태그 삽입
+    let finalDataUrl = dataUrl
+    if (location?.status === 'OK' && dataUrl.startsWith('data:image/jpeg')) {
+      const exifObj = {
+        GPS: {
+          [piexif.GPSIFD.GPSLatitudeRef]:  location.lat >= 0 ? 'N' : 'S',
+          [piexif.GPSIFD.GPSLatitude]:     toExifRational(location.lat),
+          [piexif.GPSIFD.GPSLongitudeRef]: location.lng >= 0 ? 'E' : 'W',
+          [piexif.GPSIFD.GPSLongitude]:    toExifRational(location.lng),
+        },
+      }
+      finalDataUrl = piexif.insert(piexif.dump(exifObj), dataUrl)
+    }
+
+    const base64 = finalDataUrl.replace(/^data:image\/\w+;base64,/, '')
     const buffer = Buffer.from(base64, 'base64')
     const filepath = join(dir, filename)
     await fs.writeFile(filepath, buffer)
@@ -151,9 +186,36 @@ ipcMain.handle('open-file', async (_, filePath) => {
   await shell.openPath(filePath)
 })
 
+/** 사진 파일을 디스크에서 영구 삭제 */
+ipcMain.handle('delete-photo', async (_, filePath) => {
+  try {
+    await fs.remove(filePath)
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err.message }
+  }
+})
+
 /** Open the PhotoBooth root folder in Explorer/Finder */
 ipcMain.handle('open-folder', async () => {
   const dir = getPhotoBaseDir()
   await fs.ensureDir(dir)
   await shell.openPath(dir)
+})
+
+// ─── Window Controls ──────────────────────────────────────────────────────────
+
+// getFocusedWindow() 대신 mainWindow 직접 참조
+// — IPC 호출 시 버튼 클릭으로 포커스가 잠깐 이동해 getFocusedWindow()가 null을 반환하는 버그 방지
+ipcMain.handle('window-minimize', () => {
+  mainWindow?.minimize()
+})
+
+ipcMain.handle('window-maximize', () => {
+  if (!mainWindow) return
+  mainWindow.isMaximized() ? mainWindow.restore() : mainWindow.maximize()
+})
+
+ipcMain.handle('window-close', () => {
+  mainWindow?.close()
 })

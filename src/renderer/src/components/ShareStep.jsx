@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Download, RotateCcw, Folder, CheckCircle, XCircle } from 'lucide-react'
 import ShareButton from './ShareButton'
 
-export default function ShareStep({ compositeImage, onRestart }) {
+export default function ShareStep({ compositeImage, location, onRestart }) {
   const [saveState, setSaveState] = useState('idle') // idle|saving|saved|error
   const [savedPath, setSavedPath] = useState(null)
 
@@ -11,8 +11,8 @@ export default function ShareStep({ compositeImage, onRestart }) {
     if (saveState === 'saving' || saveState === 'saved') return
     setSaveState('saving')
     try {
-      const filename = `photobooth_${Date.now()}.png`
-      const result = await window.electronAPI.savePhoto({ dataUrl: compositeImage, filename })
+      const filename = `photobooth_${Date.now()}.jpg`
+      const result = await window.electronAPI.savePhoto({ dataUrl: compositeImage, filename, location })
       if (result.success) {
         setSaveState('saved')
         setSavedPath(result.path)

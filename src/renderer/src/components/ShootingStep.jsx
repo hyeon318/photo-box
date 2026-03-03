@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { X } from 'lucide-react'
+import { X, Zap } from 'lucide-react'
 import { config } from '../config'
 import BackgroundBlurCamera from './BackgroundBlurCamera'
-import FilterSelector from './FilterSelector'
+import { useLocation } from '../hooks/useLocation'
 
 // ─── Web Audio shutter sound ──────────────────────────────────────────────────
 function playShutter() {
@@ -26,6 +26,22 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+// captureNowRef 또는 stoppedRef가 set되면 즉시 resolve되는 인터럽트 가능 delay
+function makePollDelay(captureNowRef, stoppedRef) {
+  return (ms) => new Promise(resolve => {
+    if (captureNowRef.current || stoppedRef.current) { resolve(); return }
+    const POLL = 40
+    let elapsed = 0
+    const id = setInterval(() => {
+      elapsed += POLL
+      if (captureNowRef.current || stoppedRef.current || elapsed >= ms) {
+        clearInterval(id)
+        resolve()
+      }
+    }, POLL)
+  })
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function ShootingStep({ settings, onComplete, onCancel }) {
@@ -42,19 +58,27 @@ export default function ShootingStep({ settings, onComplete, onCancel }) {
 
   const cameraReadyRef = useRef(false)
   const stoppedRef     = useRef(false)
+  const captureNowRef  = useRef(false)
 
-  const [photos,         setPhotos]         = useState([])
-  const [shotCount,      setShotCount]      = useState(0)
-  const [countdown,      setCountdown]      = useState(null)
-  const [isFlashing,     setIsFlashing]     = useState(false)
-  const [phase,          setPhase]          = useState('init') // init | shooting | done
-  const [message,        setMessage]        = useState('')
-  const [selectedFilter, setSelectedFilter] = useState(config.photoFilters[0])
-  // stable callback 안에서 최신 필터값을 읽기 위한 ref
-  const selectedFilterRef = useRef(config.photoFilters[0])
-  useEffect(() => { selectedFilterRef.current = selectedFilter }, [selectedFilter])
+  const [photos,     setPhotos]     = useState([])
+  const [shotCount,  setShotCount]  = useState(0)
+  const [countdown,  setCountdown]  = useState(null)
+  const [isFlashing, setIsFlashing] = useState(false)
+  const [phase,      setPhase]      = useState('init') // init | shooting | done
+  const [message,    setMessage]    = useState('')
+
+  // prefetch: true → 카메라 준비(~0.8s) 동안 위치를 동시에 fetch해 촬영 시 지연 없음
+  const { getSnapshot: getLocationSnapshot } = useLocation({ prefetch: true })
 
   const { totalShots, intervalSeconds, countdownSeconds } = settings
+
+  // ── 슬롯 비율 계산 (레이아웃에 맞게 미리보기/캡처 비율 결정) ─────────────────
+  const { cols, rows } = settings.layout
+  const dims       = config.frameDimensions[settings.layout.id] || { width: 640, height: 1920 }
+  const slotW      = (dims.width  - config.photoMargin * (cols + 1)) / cols
+  const slotH      = (dims.height - config.footerHeight - config.photoMargin * (rows + 1)) / rows
+  const slotAspect = slotW / slotH   // e.g. ~1.40 for 1x4
+  const slotAspectRatio = `${Math.round(slotW)} / ${Math.round(slotH)}`
 
   // AI mode: called by BackgroundBlurCamera when AI model + webcam are ready
   const handleAICameraReady = useCallback(() => {
@@ -64,23 +88,39 @@ export default function ShootingStep({ settings, onComplete, onCancel }) {
   // Unified capture — routes to the right implementation depending on mode
   const captureFrame = useCallback(async () => {
     if (isAIMode) {
-      // BackgroundBlurCamera: 다음 onResults 프레임에서 live mask로 고해상도 합성
       return (await aiCameraRef.current?.captureFrame()) ?? null
     }
-    // None mode: plain mirrored frame (필터 적용)
+    // None mode: mirror + center-crop to slot aspect ratio (필터는 SelectStep에서 적용)
     const video  = videoRef.current
     const canvas = canvasRef.current
     if (!video || !canvas) return null
-    canvas.width  = video.videoWidth  || 1280
-    canvas.height = video.videoHeight || 720
+
+    const vw = video.videoWidth  || 1280
+    const vh = video.videoHeight || 720
+
+    // Center-crop to slot aspect
+    const videoAspect = vw / vh
+    let sx = 0, sy = 0, sw = vw, sh = vh
+    if (videoAspect > slotAspect) {
+      sw = vh * slotAspect
+      sx = (vw - sw) / 2
+    } else {
+      sh = vw / slotAspect
+      sy = (vh - sh) / 2
+    }
+
+    canvas.width  = Math.round(sw)
+    canvas.height = Math.round(sh)
+
     const ctx = canvas.getContext('2d')
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    ctx.save()
     ctx.translate(canvas.width, 0)
     ctx.scale(-1, 1)
-    ctx.filter = selectedFilterRef.current.filter
-    ctx.drawImage(video, 0, 0)
-    ctx.filter = 'none'
+    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
+    ctx.restore()
     return canvas.toDataURL('image/png')
-  }, [isAIMode])
+  }, [isAIMode, slotAspect])
 
   // ── Main shooting sequence ──────────────────────────────────────────────
   useEffect(() => {
@@ -129,27 +169,32 @@ export default function ShootingStep({ settings, onComplete, onCancel }) {
       setPhase('shooting')
       setMessage('')
 
+      const pollDelay = makePollDelay(captureNowRef, stoppedRef)
+
       // ── Shooting loop ────────────────────────────────────────────────────
       for (let i = 0; i < totalShots; i++) {
         if (stoppedRef.current) break
 
         // 모든 컷(첫 번째 포함)에 동일하게 silent wait 적용
         const silentWait = (intervalSeconds - countdownSeconds) * 1000
-        if (silentWait > 0) {
+        if (silentWait > 0 && !captureNowRef.current) {
           setMessage(i === 0 ? '촬영 준비 중...' : '다음 촬영 준비 중...')
-          await delay(silentWait)
+          await pollDelay(silentWait)
           setMessage('')
         }
 
         if (stoppedRef.current) break
 
-        // Countdown
-        for (let c = countdownSeconds; c >= 1; c--) {
-          if (stoppedRef.current) break
-          setCountdown(c)
-          await delay(1000)
+        // Countdown — captureNowRef가 이미 set이면 카운트다운 생략
+        if (!captureNowRef.current) {
+          for (let c = countdownSeconds; c >= 1; c--) {
+            if (stoppedRef.current || captureNowRef.current) break
+            setCountdown(c)
+            await pollDelay(1000)
+          }
         }
         setCountdown(null)
+        captureNowRef.current = false  // 플래그 소비
 
         if (stoppedRef.current) break
 
@@ -171,7 +216,7 @@ export default function ShootingStep({ settings, onComplete, onCancel }) {
         setMessage('촬영 완료!')
         if (!isAIMode) streamRef.current?.getTracks().forEach(t => t.stop())
         await delay(700)
-        onComplete(capturedList)
+        onComplete(capturedList, getLocationSnapshot())
       }
     }
 
@@ -191,6 +236,19 @@ export default function ShootingStep({ settings, onComplete, onCancel }) {
     onCancel()
   }
 
+  // Space bar → 즉시 촬영
+  useEffect(() => {
+    if (phase !== 'shooting') return
+    const onKey = (e) => {
+      if (e.code === 'Space' || e.key === ' ') {
+        e.preventDefault()
+        captureNowRef.current = true
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [phase])
+
   return (
     <div className="flex flex-col items-center justify-center h-full py-6 px-6">
       {/* Shutter flash overlay */}
@@ -201,7 +259,10 @@ export default function ShootingStep({ settings, onComplete, onCancel }) {
       <div className="w-full max-w-5xl grid grid-cols-3 gap-6">
         {/* ── Camera preview (2/3 width) ── */}
         <div className="col-span-2 flex flex-col gap-3">
-          <div className="relative rounded-2xl overflow-hidden bg-gray-900 aspect-video shadow-2xl">
+          <div
+            className="relative rounded-2xl overflow-hidden bg-gray-900 shadow-2xl"
+            style={{ aspectRatio: slotAspectRatio }}
+          >
 
             {/* ── AI mode: background compositing camera (solid / blur) ── */}
             {isAIMode && (
@@ -269,6 +330,17 @@ export default function ShootingStep({ settings, onComplete, onCancel }) {
                 </>
               )}
             </span>
+
+            {phase === 'shooting' && (
+              <button
+                onClick={() => { captureNowRef.current = true }}
+                className="flex items-center gap-1.5 text-sm text-pink-400 hover:text-pink-300 bg-pink-950/40 hover:bg-pink-950/70 px-3 py-1.5 rounded-lg transition-colors"
+                title="즉시 촬영 (Space)"
+              >
+                <Zap size={14} />
+                지금 찍기
+              </button>
+            )}
           </div>
         </div>
 
@@ -279,9 +351,10 @@ export default function ShootingStep({ settings, onComplete, onCancel }) {
             {Array.from({ length: totalShots }).map((_, i) => (
               <div
                 key={i}
-                className={`aspect-video rounded-lg overflow-hidden transition-all ${
+                className={`rounded-lg overflow-hidden transition-all ${
                   photos[i] ? 'ring-1 ring-pink-500/40' : 'bg-gray-800/60'
                 }`}
+                style={{ aspectRatio: slotAspectRatio }}
               >
                 {photos[i] ? (
                   <img src={photos[i]} alt={`shot ${i + 1}`} className="w-full h-full object-cover" />

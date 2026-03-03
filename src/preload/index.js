@@ -19,4 +19,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   /** Copy image (dataURL) to the OS clipboard — paste anywhere with Ctrl+V */
   copyToClipboard: (dataUrl) => ipcRenderer.invoke('copy-to-clipboard', dataUrl),
+
+  /** 사진 파일 영구 삭제 */
+  deletePhoto: (filePath) => ipcRenderer.invoke('delete-photo', filePath),
+
+  /** Window controls */
+  windowMinimize: () => ipcRenderer.invoke('window-minimize'),
+  windowMaximize: () => ipcRenderer.invoke('window-maximize'),
+  windowClose:    () => ipcRenderer.invoke('window-close'),
 })
