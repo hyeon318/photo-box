@@ -173,11 +173,16 @@ export default function ShootingStep({ settings, onComplete, onCancel }) {
       for (let i = 0; i < totalShots; i++) {
         if (stoppedRef.current) break
 
-        // 모든 컷(첫 번째 포함)에 동일하게 silent wait 적용
+        // 모든 컷(첫 번째 포함)에 동일하게 silent wait 적용 (1초씩 카운트다운 표시)
         const silentWait = (intervalSeconds - countdownSeconds) * 1000
         if (silentWait > 0 && !captureNowRef.current) {
-          setMessage(i === 0 ? '촬영 준비 중...' : '다음 촬영 준비 중...')
-          await pollDelay(silentWait)
+          const label = i === 0 ? '촬영 준비 중' : '다음 촬영 준비 중'
+          const waitSecs = Math.round(silentWait / 1000)
+          for (let t = waitSecs; t >= 1; t--) {
+            if (stoppedRef.current || captureNowRef.current) break
+            setMessage(`${label} ${t}초`)
+            await pollDelay(1000)
+          }
           setMessage('')
         }
 
