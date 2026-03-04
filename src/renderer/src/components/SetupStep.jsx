@@ -1,12 +1,26 @@
-import { useState } from "react";
-import { Play } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { Play, MapPin, AlertTriangle, ExternalLink, Check } from "lucide-react";
 import { config } from "../config";
 
 // Shot count options — filter to those ≥ selectCount
 const ALL_SHOT_OPTIONS = [2, 4, 6, 8];
 
-export default function SetupStep({ defaultSettings, onStart }) {
+export default function SetupStep({ defaultSettings, onStart, winLocStatus: preloadedWinLocStatus = null, onSettingsChange }) {
   const [settings, setSettings] = useState(defaultSettings);
+  // App.jsx 초기 로딩에서 pre-cache된 값을 초기값으로 사용
+  const [winLocStatus, setWinLocStatus] = useState(preloadedWinLocStatus);
+  // 이미 preload된 경우 IPC 재호출 방지
+  const checkedRef = useRef(preloadedWinLocStatus !== null);
+
+  // 위치 토글이 ON으로 바뀌었을 때만 — 아직 캐시된 값이 없는 경우에 한해 확인
+  useEffect(() => {
+    if (!settings.enableLocation) return;
+    if (checkedRef.current) return;
+    checkedRef.current = true;
+    window.electronAPI.checkWindowsLocation()
+      .then(r => setWinLocStatus(r.enabled))
+      .catch(() => {});
+  }, [settings.enableLocation]);
 
   const handleLayoutChange = (layout) => {
     const newSelectCount = layout.cols * layout.rows;
@@ -195,6 +209,62 @@ export default function SetupStep({ defaultSettings, onStart }) {
                 <span>5초</span>
               </div>
             </div>
+          </div>
+
+          {/* ── 위치 정보 저장 ──────────────────────────────────────────── */}
+          <div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <MapPin size={15} className="text-gray-400" />
+                <span className="text-sm font-semibold text-gray-300">위치 정보 저장</span>
+                <span className="text-xs text-gray-600">사진 EXIF에 GPS 기록</span>
+              </div>
+              {/* 토글 스위치 */}
+              <button
+                onClick={() => {
+                  const newVal = !settings.enableLocation;
+                  setSettings(s => ({ ...s, enableLocation: newVal }));
+                  onSettingsChange?.({ enableLocation: newVal });
+                }}
+                className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 focus:outline-none ${
+                  settings.enableLocation ? 'bg-pink-500' : 'bg-gray-700'
+                }`}
+              >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform duration-200 ${
+                  settings.enableLocation ? 'translate-x-6' : 'translate-x-1'
+                }`} />
+              </button>
+            </div>
+
+            {/* Windows 위치 서비스 상태 */}
+            {settings.enableLocation && (
+              <div className="mt-2">
+                {winLocStatus === null && (
+                  <p className="text-xs text-gray-500 pl-1">Windows 위치 서비스 확인 중...</p>
+                )}
+                {winLocStatus === true && (
+                  <div className="flex items-center gap-1.5 text-xs text-emerald-400">
+                    <Check size={13} />
+                    Windows 위치 서비스 켜짐 — Wi-Fi 기반 위치를 사용합니다
+                  </div>
+                )}
+                {winLocStatus === false && (
+                  <div className="flex items-center justify-between bg-amber-950/40 border border-amber-800/60 rounded-xl px-3 py-2.5">
+                    <div className="flex items-center gap-2 text-xs text-amber-400">
+                      <AlertTriangle size={13} className="flex-shrink-0" />
+                      Windows 위치 서비스가 꺼져 있습니다. IP 기반 위치(도시 수준)로 저장됩니다.
+                    </div>
+                    <button
+                      onClick={() => window.electronAPI.openLocationSettings()}
+                      className="flex items-center gap-1 text-xs text-amber-300 hover:text-white whitespace-nowrap ml-3 underline underline-offset-2"
+                    >
+                      설정 열기
+                      <ExternalLink size={11} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* ── Summary ─────────────────────────────────────────────────── */}

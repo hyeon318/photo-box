@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { X, Zap } from 'lucide-react'
 import { config } from '../config'
 import BackgroundBlurCamera from './BackgroundBlurCamera'
-import { useLocation } from '../hooks/useLocation'
+import { cancelPrewarm } from '../utils/cameraStreamSingleton'
 
 // ─── Web Audio shutter sound ──────────────────────────────────────────────────
 function playShutter() {
@@ -67,8 +67,6 @@ export default function ShootingStep({ settings, onComplete, onCancel }) {
   const [phase,      setPhase]      = useState('init') // init | shooting | done
   const [message,    setMessage]    = useState('')
 
-  // prefetch: true → 카메라 준비(~0.8s) 동안 위치를 동시에 fetch해 촬영 시 지연 없음
-  const { getSnapshot: getLocationSnapshot } = useLocation({ prefetch: true })
 
   const { totalShots, intervalSeconds, countdownSeconds } = settings
 
@@ -216,7 +214,7 @@ export default function ShootingStep({ settings, onComplete, onCancel }) {
         setMessage('촬영 완료!')
         if (!isAIMode) streamRef.current?.getTracks().forEach(t => t.stop())
         await delay(700)
-        onComplete(capturedList, getLocationSnapshot())
+        onComplete(capturedList)
       }
     }
 
@@ -224,15 +222,25 @@ export default function ShootingStep({ settings, onComplete, onCancel }) {
 
     return () => {
       stoppedRef.current = true
-      // none mode: stop the stream we opened
-      if (!isAIMode) streamRef.current?.getTracks().forEach(t => t.stop())
-      // AI mode: BackgroundBlurCamera handles its own cleanup on unmount
+      if (!isAIMode) {
+        // none mode: stop the stream we opened
+        streamRef.current?.getTracks().forEach(t => t.stop())
+      } else {
+        // AI mode: BackgroundBlurCamera handles its stream,
+        // but prewarm stream (resolved after unmount) must be explicitly cancelled
+        cancelPrewarm()
+      }
     }
   }, []) // intentional empty deps — runs once on mount
 
   const handleCancel = () => {
     stoppedRef.current = true
-    if (!isAIMode) streamRef.current?.getTracks().forEach(t => t.stop())
+    if (!isAIMode) {
+      streamRef.current?.getTracks().forEach(t => t.stop())
+    } else {
+      // prewarm 스트림이 취소 후에 resolve되어 누수되는 것을 방지
+      cancelPrewarm()
+    }
     onCancel()
   }
 

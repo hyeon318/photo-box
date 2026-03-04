@@ -27,4 +27,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   windowMinimize: () => ipcRenderer.invoke('window-minimize'),
   windowMaximize: () => ipcRenderer.invoke('window-maximize'),
   windowClose:    () => ipcRenderer.invoke('window-close'),
+
+  /** Windows OS 레벨 위치 조회 (.NET GeoCoordinateWatcher) */
+  getWindowsLocation: () => ipcRenderer.invoke('get-windows-location'),
+  /** IP 기반 위치 조회 (메인 프로세스 경유 — CORS 없음) */
+  getIpLocation: () => ipcRenderer.invoke('get-ip-location'),
+
+  /** Windows 위치 서비스 상태 확인 */
+  checkWindowsLocation: () => ipcRenderer.invoke('check-windows-location'),
+  /** Windows 위치 설정 페이지 열기 */
+  openLocationSettings: () => ipcRenderer.invoke('open-location-settings'),
 })

@@ -16,14 +16,18 @@ export async function preloadSeg() {
   if (initPromise) return initPromise
 
   initPromise = (async () => {
-    // selfie_segmentation.js 는 IIFE → window.SelfieSegmentation 에 등록
-    await import('@mediapipe/selfie_segmentation')
+    // selfie_segmentation.js 는 IIFE → window.SelfieSegmentation 에 등록.
+    // optimizeDeps.exclude 설정 덕분에 Vite가 pre-bundle 하지 않고 원본 IIFE 로드.
+    const mod = await import('@mediapipe/selfie_segmentation')
 
-    const SelfieSegmentation = window.SelfieSegmentation
+    // IIFE → window 등록 방식과, esbuild가 default export로 변환한 경우를 모두 대응
+    const SelfieSegmentation =
+      window.SelfieSegmentation ?? mod.default ?? mod.SelfieSegmentation
     if (!SelfieSegmentation) throw new Error('SelfieSegmentation not found on window')
 
     const seg = new SelfieSegmentation({
-      locateFile: (file) => `./mediapipe/${file}`,
+      // 절대경로 사용 — 상대경로는 Electron 컨텍스트에 따라 기준 URL이 달라질 수 있음
+      locateFile: (file) => `/mediapipe/${file}`,
     })
     seg.setOptions({ modelSelection: 1 })
     await seg.initialize()
@@ -31,6 +35,9 @@ export async function preloadSeg() {
     instance = seg
     return seg
   })()
+
+  // 실패 시 initPromise를 리셋해 BackgroundBlurCamera가 재시도할 수 있도록 함
+  initPromise.catch(() => { initPromise = null })
 
   return initPromise
 }

@@ -5,6 +5,7 @@ import {
   ChevronLeft, ChevronRight, Trash2, MapPin,
 } from 'lucide-react'
 import piexif from 'piexifjs'
+import { reverseGeocode } from '../utils/reverseGeocode'
 
 // EXIF rational DMS → 소수점 좌표 변환
 function extractGps(dataUrl) {
@@ -34,6 +35,7 @@ export default function GalleryView({ onBack }) {
   const [loading,       setLoading]       = useState(true)
   const [lightbox,      setLightbox]      = useState(null)   // 현재 상세보기 사진
   const [lightboxGps,   setLightboxGps]   = useState(null)   // 라이트박스 GPS 정보
+  const [lightboxAddr,  setLightboxAddr]  = useState(null)   // 역지오코딩 주소
   const [copySuccess,   setCopySuccess]   = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)  // 삭제 2단계 확인
 
@@ -42,7 +44,14 @@ export default function GalleryView({ onBack }) {
     setLoading(true)
     try {
       const result = await window.electronAPI.getPhotos()
-      if (result.success) setGrouped(result.data)
+      if (result.success) {
+        // 각 사진에 GPS 정보 미리 추출해서 붙여둠 (piexifjs는 빠른 로컬 파싱)
+        const enriched = {}
+        for (const [date, photos] of Object.entries(result.data)) {
+          enriched[date] = photos.map(p => ({ ...p, gps: extractGps(p.dataUrl) }))
+        }
+        setGrouped(enriched)
+      }
     } finally {
       setLoading(false)
     }
@@ -67,9 +76,19 @@ export default function GalleryView({ onBack }) {
   const openLightbox = (photo) => {
     setLightbox(photo)
     setConfirmDelete(false)
-    setLightboxGps(extractGps(photo.dataUrl))
+    setLightboxAddr(null)
+    const gps = extractGps(photo.dataUrl)
+    setLightboxGps(gps)
+    if (gps) {
+      reverseGeocode(gps.lat, gps.lng).then(setLightboxAddr)
+    }
   }
-  const closeLightbox = () => { setLightbox(null); setLightboxGps(null); setConfirmDelete(false) }
+  const closeLightbox = () => {
+    setLightbox(null)
+    setLightboxGps(null)
+    setLightboxAddr(null)
+    setConfirmDelete(false)
+  }
 
   // ── 이전 / 다음 탐색 ─────────────────────────────────────────────────────────
   const goPrev = useCallback(() => {
@@ -200,13 +219,18 @@ export default function GalleryView({ onBack }) {
                     <button
                       key={photo.filename}
                       onClick={() => openLightbox(photo)}
-                      className="aspect-[3/4] bg-gray-900 rounded-xl overflow-hidden hover:ring-2 hover:ring-pink-500 hover:scale-[1.02] transition-all"
+                      className="relative aspect-[3/4] bg-gray-900 rounded-xl overflow-hidden hover:ring-2 hover:ring-pink-500 hover:scale-[1.02] transition-all"
                     >
                       <img
                         src={photo.dataUrl}
                         alt={photo.filename}
                         className="w-full h-full object-cover"
                       />
+                      {photo.gps && (
+                        <div className="absolute bottom-1.5 right-1.5 bg-black/60 backdrop-blur-sm rounded-full p-1">
+                          <MapPin size={10} className="text-pink-400" />
+                        </div>
+                      )}
                     </button>
                   ))}
                 </div>
@@ -266,19 +290,19 @@ export default function GalleryView({ onBack }) {
                 {formatKoreanDate(lightbox.date)}&nbsp;·&nbsp;{lightbox.filename}
               </p>
 
-              {/* GPS 정보 */}
+              {/* GPS / 주소 정보 */}
               {lightboxGps && (
                 <a
                   href={`https://www.google.com/maps?q=${lightboxGps.lat},${lightboxGps.lng}`}
                   target="_blank"
                   rel="noreferrer"
-                  className="mt-1.5 w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-gray-800/80 hover:bg-gray-700 text-xs text-gray-400 hover:text-white transition-colors"
+                  className="mt-1.5 w-full flex items-center gap-1.5 py-2 px-3 rounded-xl bg-gray-800/80 hover:bg-gray-700 text-xs text-gray-400 hover:text-white transition-colors"
                 >
                   <MapPin size={12} className="text-pink-400 flex-shrink-0" />
-                  <span className="tabular-nums">
-                    {lightboxGps.lat.toFixed(5)}, {lightboxGps.lng.toFixed(5)}
+                  <span className="flex-1 truncate">
+                    {lightboxAddr ?? `${lightboxGps.lat.toFixed(4)}, ${lightboxGps.lng.toFixed(4)}`}
                   </span>
-                  <ExternalLink size={11} className="ml-auto flex-shrink-0 opacity-50" />
+                  <ExternalLink size={11} className="flex-shrink-0 opacity-50" />
                 </a>
               )}
 

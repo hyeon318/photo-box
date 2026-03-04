@@ -1,6 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Camera, Images, Minus, Maximize2, X } from 'lucide-react'
 import { config } from './config'
+import { getLocation } from './utils/getLocation'
+import { preloadSeg } from './utils/selfieSegSingleton'
+import { prewarmCamera } from './utils/cameraStreamSingleton'
 import IntroScreen from './components/IntroScreen'
 import SetupStep from './components/SetupStep'
 import ShootingStep from './components/ShootingStep'
@@ -11,25 +14,110 @@ import GalleryView from './components/GalleryView'
 // ─── Step type ───────────────────────────────────────────────────────────────
 // 'intro' | 'setup' | 'shooting' | 'select' | 'share' | 'gallery'
 
+const SETTINGS_KEY = 'photobooth_settings'
+
+function loadSettings() {
+  const defaultLayout = config.layouts.find(l => l.id === '1x4') ?? config.layouts[0]
+  const defaults = {
+    totalShots:       config.totalShots,
+    selectCount:      defaultLayout.cols * defaultLayout.rows,
+    intervalSeconds:  config.intervalSeconds,
+    countdownSeconds: config.countdownSeconds,
+    layout:           defaultLayout,
+    bgEffect:         'none',
+    frameColor:       config.frameColors[0],
+    enableLocation:   true,
+  }
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}')
+    // layout / frameColor는 id로 저장했다가 config에서 다시 찾아서 복원
+    const layout    = config.layouts.find(l => l.id === saved.layoutId) ?? defaultLayout
+    const frameColor = config.frameColors.find(c => c.id === saved.frameColorId) ?? config.frameColors[0]
+    return {
+      ...defaults,
+      ...(saved.totalShots       != null && { totalShots:       saved.totalShots       }),
+      ...(saved.intervalSeconds  != null && { intervalSeconds:  saved.intervalSeconds  }),
+      ...(saved.countdownSeconds != null && { countdownSeconds: saved.countdownSeconds }),
+      ...(saved.bgEffect         != null && { bgEffect:         saved.bgEffect         }),
+      ...(saved.enableLocation   != null && { enableLocation:   saved.enableLocation   }),
+      layout,
+      frameColor,
+      selectCount: layout.cols * layout.rows,
+    }
+  } catch {
+    return defaults
+  }
+}
+
+function saveSettings(settings) {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      totalShots:       settings.totalShots,
+      intervalSeconds:  settings.intervalSeconds,
+      countdownSeconds: settings.countdownSeconds,
+      bgEffect:         settings.bgEffect,
+      enableLocation:   settings.enableLocation,
+      layoutId:         settings.layout?.id,
+      frameColorId:     settings.frameColor?.id,
+    }))
+  } catch { /* 저장 실패 무시 */ }
+}
+
 export default function App() {
   const [step, setStep] = useState('intro')
+  const [settings, setSettings] = useState(loadSettings)
 
-  // Default to 1x4 (the classic 인생네컷 format)
-  const defaultLayout = config.layouts.find(l => l.id === '1x4') ?? config.layouts[0]
+  // settings 바뀔 때마다 자동 저장
+  useEffect(() => { saveSettings(settings) }, [settings])
 
-  const [settings, setSettings] = useState({
-    totalShots: config.totalShots,
-    selectCount: defaultLayout.cols * defaultLayout.rows,
-    intervalSeconds: config.intervalSeconds,
-    countdownSeconds: config.countdownSeconds,
-    layout: defaultLayout,
-    bgEffect: 'none',
-    frameColor: config.frameColors[0],
+  const [capturedPhotos, setCapturedPhotos] = useState([])
+  const [compositeImage, setCompositeImage] = useState(null)
+
+  // ── 앱 초기 로딩 ─────────────────────────────────────────────────────────
+  // WASM 모델 + 위치 정보를 병렬 프리로드. 완료 전까지 IntroScreen 버튼 비활성.
+  const locationRef   = useRef(null)
+  const [winLocStatus, setWinLocStatus] = useState(null)
+  const [loadingItems, setLoadingItems] = useState(() => {
+    const saved = loadSettings()
+    const items = [{ id: 'wasm', label: 'AI 배경 모델', done: false, failed: false }]
+    if (saved.enableLocation) items.push({ id: 'location', label: '위치 정보', done: false, failed: false })
+    return items
   })
 
-  const [capturedPhotos, setCapturedPhotos] = useState([])   // dataUrl[]
-  const [compositeImage, setCompositeImage] = useState(null) // dataUrl
-  const [captureLocation, setCaptureLocation] = useState(null) // { lat, lng, accuracy, status }
+  // loadingItems가 모두 done이면 바로 true — 별도 state 없이 같은 렌더 사이클에서 반영
+  const appReady = loadingItems.every(item => item.done)
+
+  useEffect(() => {
+    const mark = (id, failed = false) =>
+      setLoadingItems(prev => prev.map(item => item.id === id ? { ...item, done: true, failed } : item))
+
+    // Task 1: MediaPipe WASM 프리로드 — 실패해도 done 처리, failed 플래그로 구분
+    preloadSeg().then(() => mark('wasm', false)).catch(() => mark('wasm', true))
+
+    // Task 2: 위치 정보 + Windows 서비스 상태 확인 (설정이 켜진 경우만)
+    if (settings.enableLocation) {
+      Promise.all([
+        getLocation()
+          .then(loc => { if (loc?.status === 'OK') locationRef.current = loc })
+          .catch(() => {}),
+        window.electronAPI.checkWindowsLocation()
+          .then(r => setWinLocStatus(r.enabled))
+          .catch(() => {}),
+      ]).finally(() => mark('location', false))
+    }
+
+  }, []) // 마운트 1회만
+
+  // 설정 일부 변경 시 즉시 App state + localStorage 반영
+  // useEffect 타이밍에 의존하지 않고 동기적으로 저장 (토글 등 즉시 반영)
+  const settingsRef = useRef(settings)
+  useEffect(() => { settingsRef.current = settings }, [settings])
+
+  const handleSettingsChange = (partial) => {
+    const next = { ...settingsRef.current, ...partial }
+    setSettings(next)
+    saveSettings(next)
+  }
 
   // ── Handlers ─────────────────────────────────────────────────────────────
 
@@ -37,12 +125,14 @@ export default function App() {
     setSettings(newSettings)
     setCapturedPhotos([])
     setCompositeImage(null)
+    // AI 모드이면 카메라를 지금 바로 열기 시작 — ShootingStep 렌더보다 먼저 시작해
+    // BackgroundBlurCamera 마운트 시 getUserMedia 대기 없이 스트림 바로 사용 가능
+    if (newSettings.bgEffect !== 'none') prewarmCamera().catch(() => {})
     setStep('shooting')
   }
 
-  const handleShootingComplete = (photos, location) => {
+  const handleShootingComplete = (photos) => {
     setCapturedPhotos(photos)
-    setCaptureLocation(location ?? null)
     setStep('select')
   }
 
@@ -54,7 +144,6 @@ export default function App() {
   const handleRestart = () => {
     setCapturedPhotos([])
     setCompositeImage(null)
-    setCaptureLocation(null)
     setStep('setup')
   }
 
@@ -96,11 +185,20 @@ export default function App() {
       {/* Main content area */}
       <main className="flex-1 overflow-hidden scrollable">
         {step === 'intro' && (
-          <IntroScreen onReady={() => setStep('setup')} />
+          <IntroScreen
+            onReady={() => setStep('setup')}
+            isReady={appReady}
+            loadingItems={loadingItems}
+          />
         )}
 
         {step === 'setup' && (
-          <SetupStep defaultSettings={settings} onStart={handleStart} />
+          <SetupStep
+            defaultSettings={settings}
+            onStart={handleStart}
+            winLocStatus={winLocStatus}
+            onSettingsChange={handleSettingsChange}
+          />
         )}
 
         {step === 'shooting' && (
@@ -123,7 +221,7 @@ export default function App() {
         {step === 'share' && (
           <ShareStep
             compositeImage={compositeImage}
-            location={captureLocation}
+            location={locationRef.current}
             onRestart={handleRestart}
           />
         )}

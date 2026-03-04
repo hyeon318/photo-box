@@ -3,6 +3,7 @@ import {
   forwardRef, useImperativeHandle,
 } from 'react'
 import { getSeg, preloadSeg, releaseSeg } from '../utils/selfieSegSingleton'
+import { getPrewarmStream } from '../utils/cameraStreamSingleton'
 
 const PREVIEW_W  = 640
 const PREVIEW_H  = 360
@@ -46,6 +47,8 @@ const BackgroundBlurCamera = forwardRef(function BackgroundBlurCamera(
   const pendingCaptureRef  = useRef(null)
   // 마스크 페더링용 재사용 캔버스 (매 프레임 할당 방지, 지연 초기화)
   const featherMaskRef     = useRef(null)
+  // 블러 배경용 다운샘플 임시 캔버스 (ctx.filter 대체)
+  const blurTempRef        = useRef(null)
 
   // ── State ─────────────────────────────────────────────────────────────────
   const [blurAmount, setBlurAmount] = useState(15)
@@ -100,9 +103,20 @@ const BackgroundBlurCamera = forwardRef(function BackgroundBlurCamera(
     // ── Step 1: Background (clearRect로 잔상 방지) ───────────────────────────
     bgCtx.clearRect(0, 0, W, H)
     if (bgEffectRef.current === 'blur') {
+      // ctx.filter = 'blur()' 는 Electron 환경에서 실패할 수 있으므로
+      // 다운샘플 → 업샘플 방식으로 블러 효과를 구현 (크로스 플랫폼 안전)
+      const bl    = blurAmountRef.current
+      const scale = Math.max(0.04, 0.6 / (1 + bl * 0.5))
+      const bW    = Math.max(1, Math.round(W * scale))
+      const bH    = Math.max(1, Math.round(H * scale))
+      if (!blurTempRef.current) blurTempRef.current = document.createElement('canvas')
+      const tmp = blurTempRef.current
+      if (tmp.width !== bW || tmp.height !== bH) { tmp.width = bW; tmp.height = bH }
+      tmp.getContext('2d').drawImage(video, 0, 0, bW, bH)
       bgCtx.save()
-      bgCtx.filter = `blur(${blurAmountRef.current}px)`
-      bgCtx.drawImage(video, 0, 0, W, H)
+      bgCtx.imageSmoothingEnabled = true
+      bgCtx.imageSmoothingQuality = 'high'
+      bgCtx.drawImage(tmp, 0, 0, bW, bH, 0, 0, W, H)
       bgCtx.restore()
     } else {
       bgCtx.fillStyle = frameColorRef.current
@@ -166,10 +180,15 @@ const BackgroundBlurCamera = forwardRef(function BackgroundBlurCamera(
     const hBg    = mkOffscreen(VW, VH)
     const hBgCtx = hBg.getContext('2d')
     if (bgEffectRef.current === 'blur') {
-      const scaledBlur = blurAmountRef.current * (VW / PREVIEW_W)
-      hBgCtx.filter = `blur(${scaledBlur}px)`
-      hBgCtx.drawImage(video, 0, 0, VW, VH)
-      hBgCtx.filter = 'none'
+      const bl     = blurAmountRef.current
+      const scale  = Math.max(0.04, 0.6 / (1 + bl * 0.5))
+      const bW     = Math.max(1, Math.round(VW * scale))
+      const bH     = Math.max(1, Math.round(VH * scale))
+      const hTmp   = mkOffscreen(bW, bH)
+      hTmp.getContext('2d').drawImage(video, 0, 0, bW, bH)
+      hBgCtx.imageSmoothingEnabled = true
+      hBgCtx.imageSmoothingQuality = 'high'
+      hBgCtx.drawImage(hTmp, 0, 0, bW, bH, 0, 0, VW, VH)
     } else {
       hBgCtx.fillStyle = frameColorRef.current
       hBgCtx.fillRect(0, 0, VW, VH)
@@ -215,10 +234,17 @@ const BackgroundBlurCamera = forwardRef(function BackgroundBlurCamera(
       segRef.current = seg
       if (cancelled) { releaseSeg(); return }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
-        audio: false,
-      })
+      // prewarm 완료까지 대기 후 스트림 수신.
+      // consumePrewarmedStream() 대신 getPrewarmStream()을 사용해
+      // prewarm과 병렬로 자체 getUserMedia를 여는 충돌(NotReadableError)을 방지.
+      let stream = await getPrewarmStream()
+      if (cancelled) { stream?.getTracks().forEach(t => t.stop()); releaseSeg(); return }
+      if (!stream) {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+          audio: false,
+        })
+      }
       if (cancelled) { stream.getTracks().forEach(t => t.stop()); releaseSeg(); return }
       streamRef.current = stream
       videoRef.current.srcObject = stream
@@ -262,6 +288,7 @@ const BackgroundBlurCamera = forwardRef(function BackgroundBlurCamera(
       }
       // 페더링 캔버스 해제
       featherMaskRef.current = null
+      blurTempRef.current    = null
     }
   }, [renderFrame])
 

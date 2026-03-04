@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, shell, clipboard, nativeImage } from 'electron'
+import { execSync, exec } from 'child_process'
 import piexif from 'piexifjs'
 import { join } from 'path'
 import fs from 'fs-extra'
@@ -43,10 +44,15 @@ app.whenReady().then(() => {
   // Electron은 기본적으로 모든 권한 요청을 거부한다.
   // Geolocation API 사용을 위해 명시적으로 허용한다.
   const { session } = require('electron')
-  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
-    const ALLOWED = ['geolocation', 'media']
-    callback(ALLOWED.includes(permission))
-  })
+  const ALLOWED_PERMISSIONS = ['geolocation', 'media']
+  // 권한 사전 체크 — 이게 없으면 Chromium이 요청 전에 차단함
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) =>
+    ALLOWED_PERMISSIONS.includes(permission)
+  )
+  // 권한 요청 핸들러
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) =>
+    callback(ALLOWED_PERMISSIONS.includes(permission))
+  )
 
   createWindow()
   app.on('activate', () => {
@@ -194,6 +200,67 @@ ipcMain.handle('delete-photo', async (_, filePath) => {
   } catch (err) {
     return { success: false, error: err.message }
   }
+})
+
+/** Windows .NET GeoCoordinateWatcher — OS 레벨 위치 직접 조회 (Chromium 우회) */
+ipcMain.handle('get-windows-location', async () => {
+  try {
+    const script = `
+$ProgressPreference = 'SilentlyContinue'
+Add-Type -AssemblyName System.Device
+$w = New-Object System.Device.Location.GeoCoordinateWatcher('High')
+$w.Start()
+$deadline = (Get-Date).AddSeconds(8)
+while ($w.Status -ne 'Ready' -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 300 }
+$loc = $w.Position.Location
+$w.Stop()
+if ($loc -eq $null -or $loc.IsUnknown) { Write-Output 'UNKNOWN' }
+else { Write-Output "$($loc.Latitude),$($loc.Longitude)" }
+`
+    // UTF-16LE 인코딩 → PowerShell -EncodedCommand (멀티라인 스크립트 안전 전달)
+    const encoded = Buffer.from(script, 'utf16le').toString('base64')
+    const out = execSync(
+      `powershell -NoProfile -EncodedCommand ${encoded}`,
+      { encoding: 'utf8', timeout: 15000 }
+    ).trim()
+
+    if (!out || out === 'UNKNOWN') return null
+    const [lat, lng] = out.split(',').map(Number)
+    if (isNaN(lat) || isNaN(lng)) return null
+    return { lat, lng }
+  } catch {
+    return null
+  }
+})
+
+/** IP 기반 위치 조회 — 메인 프로세스에서 호출해 CORS 우회 */
+ipcMain.handle('get-ip-location', async () => {
+  try {
+    const res = await fetch('https://freeipapi.com/api/json', { signal: AbortSignal.timeout(5000) })
+    const data = await res.json()
+    if (data.latitude && data.longitude) {
+      return { lat: data.latitude, lng: data.longitude }
+    }
+    return null
+  } catch {
+    return null
+  }
+})
+
+/** Windows 위치 서비스 활성화 여부를 레지스트리로 확인 (비동기 — main process 블록 방지) */
+ipcMain.handle('check-windows-location', () =>
+  new Promise((resolve) => {
+    exec(
+      `powershell -NoProfile -Command "(Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\location' -Name Value -ErrorAction SilentlyContinue).Value"`,
+      { encoding: 'utf8', timeout: 3000 },
+      (err, stdout) => resolve({ enabled: err ? null : stdout.trim() === 'Allow' })
+    )
+  })
+)
+
+/** Windows 위치 개인정보 설정 페이지 열기 */
+ipcMain.handle('open-location-settings', () => {
+  shell.openExternal('ms-settings:privacy-location')
 })
 
 /** Open the PhotoBooth root folder in Explorer/Finder */
