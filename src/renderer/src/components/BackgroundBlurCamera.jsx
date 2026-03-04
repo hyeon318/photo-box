@@ -7,8 +7,6 @@ import { getPrewarmStream } from '../utils/cameraStreamSingleton'
 
 const PREVIEW_W  = 640
 const PREVIEW_H  = 360
-// 마스크 경계 페더링 블러량 (프리뷰 해상도 기준, 고해상도는 비례 스케일)
-const FEATHER_PX = 4
 
 /**
  * BackgroundBlurCamera
@@ -51,19 +49,22 @@ const BackgroundBlurCamera = forwardRef(function BackgroundBlurCamera(
   const blurTempRef        = useRef(null)
 
   // ── State ─────────────────────────────────────────────────────────────────
-  const [blurAmount, setBlurAmount] = useState(15)
-  const [status,     setStatus]     = useState('loading')
-  const [errorMsg,   setErrorMsg]   = useState('')
+  const [blurAmount,    setBlurAmount]    = useState(15)
+  const [featherAmount, setFeatherAmount] = useState(4)   // 단색 경계 부드러움 (0=선명, 12=매우부드)
+  const [status,        setStatus]        = useState('loading')
+  const [errorMsg,      setErrorMsg]      = useState('')
 
   // Props를 ref로 미러링 — stable callback 안에서 최신값 읽기 위함
-  const bgEffectRef    = useRef(bgEffect)
-  const frameColorRef  = useRef(frameColor)
-  const blurAmountRef  = useRef(blurAmount)
-  const photoFilterRef = useRef(photoFilter)
-  useEffect(() => { bgEffectRef.current    = bgEffect    }, [bgEffect])
-  useEffect(() => { frameColorRef.current  = frameColor  }, [frameColor])
-  useEffect(() => { blurAmountRef.current  = blurAmount  }, [blurAmount])
-  useEffect(() => { photoFilterRef.current = photoFilter }, [photoFilter])
+  const bgEffectRef     = useRef(bgEffect)
+  const frameColorRef   = useRef(frameColor)
+  const blurAmountRef   = useRef(blurAmount)
+  const featherAmountRef= useRef(featherAmount)
+  const photoFilterRef  = useRef(photoFilter)
+  useEffect(() => { bgEffectRef.current     = bgEffect     }, [bgEffect])
+  useEffect(() => { frameColorRef.current   = frameColor   }, [frameColor])
+  useEffect(() => { blurAmountRef.current   = blurAmount   }, [blurAmount])
+  useEffect(() => { featherAmountRef.current= featherAmount}, [featherAmount])
+  useEffect(() => { photoFilterRef.current  = photoFilter  }, [photoFilter])
 
   // ── Ref API ───────────────────────────────────────────────────────────────
   useImperativeHandle(ref, () => ({ captureFrame: captureHighRes }), [])
@@ -132,7 +133,7 @@ const BackgroundBlurCamera = forwardRef(function BackgroundBlurCamera(
     }
     const fCtx = featherMaskRef.current.getContext('2d')
     fCtx.clearRect(0, 0, W, H)
-    fCtx.filter = `blur(${FEATHER_PX}px)`
+    fCtx.filter = `blur(${featherAmountRef.current}px)`
     fCtx.drawImage(segmentationMask, 0, 0, W, H)
     fCtx.filter = 'none'
 
@@ -169,7 +170,7 @@ const BackgroundBlurCamera = forwardRef(function BackgroundBlurCamera(
       : Object.assign(document.createElement('canvas'), { width: w, height: h })
 
     // 페더링 마스크 (고해상도 비례 블러)
-    const scaledFeather = Math.round(FEATHER_PX * (VW / PREVIEW_W))
+    const scaledFeather = Math.round(featherAmountRef.current * (VW / PREVIEW_W))
     const hMask    = mkOffscreen(VW, VH)
     const hMaskCtx = hMask.getContext('2d')
     hMaskCtx.filter = `blur(${scaledFeather}px)`
@@ -346,17 +347,22 @@ const BackgroundBlurCamera = forwardRef(function BackgroundBlurCamera(
                 <span className="text-xs text-pink-400 font-mono w-5 text-right">{blurAmount}</span>
               </>
             ) : (
-              // 단색 모드: 현재 색상 표시
+              // 단색 모드: 색상 표시 + 경계 부드러움 슬라이더
               <>
-                <span className="text-xs text-gray-300">배경 색상</span>
                 <div
-                  className="w-5 h-5 rounded-full border-2 border-white/30 shadow"
+                  className="w-4 h-4 rounded-full border-2 border-white/30 shadow flex-shrink-0"
                   style={{ backgroundColor: frameColor }}
                 />
-                <span className="text-xs text-gray-400">
-                  {/* frameColor 이름을 찾을 수 없으면 hex 표시 */}
-                  {frameColor}
-                </span>
+                <span className="text-xs text-gray-300 whitespace-nowrap">경계</span>
+                <span className="text-[10px] text-gray-400">선명</span>
+                <input
+                  type="range" min={0} max={12} step={1}
+                  value={featherAmount}
+                  onChange={e => setFeatherAmount(Number(e.target.value))}
+                  className="flex-1 accent-pink-500 cursor-pointer h-1"
+                />
+                <span className="text-[10px] text-gray-400">부드럽</span>
+                <span className="text-xs text-pink-400 font-mono w-5 text-right">{featherAmount}</span>
               </>
             )}
 
