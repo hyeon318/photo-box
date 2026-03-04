@@ -9,8 +9,8 @@ export default function SetupStep({ defaultSettings, onStart, winLocStatus: prel
   const [settings, setSettings] = useState(defaultSettings);
   // App.jsx 초기 로딩에서 pre-cache된 값을 초기값으로 사용
   const [winLocStatus, setWinLocStatus] = useState(preloadedWinLocStatus);
-  // 이미 preload된 경우 IPC 재호출 방지
-  const checkedRef = useRef(preloadedWinLocStatus !== null);
+  // undefined = 아직 확인 전, null/true/false = 확인 완료 (결과와 무관)
+  const checkedRef = useRef(preloadedWinLocStatus !== undefined);
 
   // 위치 토글이 ON으로 바뀌었을 때만 — 아직 캐시된 값이 없는 경우에 한해 확인
   useEffect(() => {
@@ -239,7 +239,7 @@ export default function SetupStep({ defaultSettings, onStart, winLocStatus: prel
             {/* Windows 위치 서비스 상태 */}
             {settings.enableLocation && (
               <div className="mt-2">
-                {winLocStatus === null && (
+                {winLocStatus === undefined && (
                   <p className="text-xs text-gray-500 pl-1">Windows 위치 서비스 확인 중...</p>
                 )}
                 {winLocStatus === true && (
@@ -252,7 +252,7 @@ export default function SetupStep({ defaultSettings, onStart, winLocStatus: prel
                   <div className="flex items-center justify-between bg-amber-950/40 border border-amber-800/60 rounded-xl px-3 py-2.5">
                     <div className="flex items-center gap-2 text-xs text-amber-400">
                       <AlertTriangle size={13} className="flex-shrink-0" />
-                      Windows 위치 서비스가 꺼져 있습니다. IP 기반 위치(도시 수준)로 저장됩니다.
+                      Windows 위치 서비스가 꺼져 있습니다. 위치 정보 없이 저장됩니다.
                     </div>
                     <button
                       onClick={() => window.electronAPI.openLocationSettings()}

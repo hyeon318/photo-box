@@ -2,9 +2,9 @@
  * 현재 위치를 가져오는 비동기 유틸 함수.
  *
  * 전략:
- *  1차) navigator.geolocation — Wi-Fi/GPS 기반, 정확도 높음
- *  2차) IP 기반 폴백 (ip-api.com) — Windows 위치 서비스 꺼져있거나 Electron에서
- *       UNAVAILABLE/TIMEOUT 반환 시 자동으로 시도. 도시 수준 정확도.
+ *  1차) navigator.geolocation — Wi-Fi/GPS 기반 (Electron에서는 UNAVAILABLE)
+ *  2차) Windows .NET GeoCoordinateWatcher — OS 레벨 측위, 실제 값
+ *  * IP 폴백 제거 — ISP 주소(부정확)를 실제 위치로 오인할 수 있어 사용 안 함
  *
  * 항상 resolve만 하고 절대 reject하지 않는다.
  */
@@ -33,34 +33,29 @@ async function getGpsLocation() {
   })
 }
 
-// IP 기반 폴백 — 메인 프로세스 IPC 경유로 CORS 없이 호출
-async function getIpLocation() {
-  try {
-    const result = await window.electronAPI.getIpLocation()
-    if (result?.lat && result?.lng) {
-      return { lat: result.lat, lng: result.lng, accuracy: null, status: 'OK' }
-    }
-  } catch { /* IPC 실패 */ }
-  return null
-}
-
 export async function getLocation() {
-  // 1순위: navigator.geolocation (Chromium)
+  // 1순위: navigator.geolocation (Chromium — Electron에서는 항상 UNAVAILABLE)
   const gpsResult = await getGpsLocation()
-  if (gpsResult.status === 'OK') return gpsResult
+  console.log('[getLocation] geolocation ->', gpsResult.status)
+  if (gpsResult.status === 'OK') {
+    console.log('[getLocation] ✅ source: navigator.geolocation')
+    return { ...gpsResult, source: 'geolocation' }
+  }
   if (gpsResult.status === 'PERMISSION_DENIED') {
-    return { lat: null, lng: null, accuracy: null, status: 'PERMISSION_DENIED' }
+    return { lat: null, lng: null, accuracy: null, status: 'PERMISSION_DENIED', source: 'geolocation' }
   }
 
-  // 2순위: Windows .NET GeoCoordinateWatcher (OS 레벨, Chromium 우회)
+  // 2순위: Windows .NET GeoCoordinateWatcher (OS 레벨, 실제 측위값)
   try {
     const win = await window.electronAPI.getWindowsLocation()
+    console.log('[getLocation] GeoCoordinateWatcher ->', win)
     if (win?.lat && win?.lng) {
-      return { lat: win.lat, lng: win.lng, accuracy: null, status: 'OK' }
+      console.log('[getLocation] ✅ source: GeoCoordinateWatcher')
+      return { lat: win.lat, lng: win.lng, accuracy: null, status: 'OK', source: 'watcher' }
     }
   } catch { /* 미지원 환경 */ }
 
-  // 3순위: IP 기반 폴백 (도시 수준, ISP 주소)
-  const ipResult = await getIpLocation()
-  return ipResult ?? { lat: null, lng: null, accuracy: null, status: 'UNKNOWN' }
+  // 위치를 특정할 수 없음 — IP 폴백 없이 UNKNOWN 반환
+  console.log('[getLocation] 위치 특정 불가 → UNKNOWN')
+  return { lat: null, lng: null, accuracy: null, status: 'UNKNOWN', source: 'none' }
 }

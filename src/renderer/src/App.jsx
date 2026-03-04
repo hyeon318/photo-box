@@ -76,7 +76,7 @@ export default function App() {
   // ── 앱 초기 로딩 ─────────────────────────────────────────────────────────
   // WASM 모델 + 위치 정보를 병렬 프리로드. 완료 전까지 IntroScreen 버튼 비활성.
   const locationRef   = useRef(null)
-  const [winLocStatus, setWinLocStatus] = useState(null)
+  const [winLocStatus, setWinLocStatus] = useState(undefined) // undefined = 아직 확인 전
   const [loadingItems, setLoadingItems] = useState(() => {
     const saved = loadSettings()
     const items = [{ id: 'wasm', label: 'AI 배경 모델', done: false, failed: false }]
@@ -101,8 +101,8 @@ export default function App() {
           .then(loc => { if (loc?.status === 'OK') locationRef.current = loc })
           .catch(() => {}),
         window.electronAPI.checkWindowsLocation()
-          .then(r => setWinLocStatus(r.enabled))
-          .catch(() => {}),
+          .then(r => setWinLocStatus(r.enabled ?? null))
+          .catch(() => setWinLocStatus(null)),
       ]).finally(() => mark('location', false))
     }
 
