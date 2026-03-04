@@ -232,20 +232,23 @@ const BackgroundBlurCamera = forwardRef(function BackgroundBlurCamera(
 
       seg.onResults(renderFrame)
       segRef.current = seg
-      if (cancelled) { releaseSeg(); return }
+      if (cancelled) return  // cleanup이 이미 releaseSeg() 처리
 
       // prewarm 완료까지 대기 후 스트림 수신.
       // consumePrewarmedStream() 대신 getPrewarmStream()을 사용해
       // prewarm과 병렬로 자체 getUserMedia를 여는 충돌(NotReadableError)을 방지.
       let stream = await getPrewarmStream()
-      if (cancelled) { stream?.getTracks().forEach(t => t.stop()); releaseSeg(); return }
+      // ⚠️ async 취소 경로에서는 releaseSeg() 호출 금지.
+      // cleanup이 이미 releaseSeg()를 실행했으므로, 여기서 다시 호출하면
+      // React StrictMode 두 번째 마운트의 seg.onResults(renderFrame)을 덮어쓰게 됨.
+      if (cancelled) { stream?.getTracks().forEach(t => t.stop()); return }
       if (!stream) {
         stream = await navigator.mediaDevices.getUserMedia({
           video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
           audio: false,
         })
       }
-      if (cancelled) { stream.getTracks().forEach(t => t.stop()); releaseSeg(); return }
+      if (cancelled) { stream.getTracks().forEach(t => t.stop()); return }
       streamRef.current = stream
       videoRef.current.srcObject = stream
       await videoRef.current.play()
