@@ -151,35 +151,72 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-gray-950 text-white overflow-hidden">
-      {/* ── 윈도우 컨트롤 — 항상 최상단 고정 (인트로 포함 전 스텝에서 표시) ── */}
-      <WindowControls />
-
-      {/* Top navigation bar — 인트로에서는 숨김 */}
+      {/* Top bar — 항상 표시. 인트로: 드래그 영역 + 창 컨트롤만. 그 외: 전체 네비 */}
       <header
-        className={`flex-shrink-0 flex items-center justify-between pl-6 pr-32 py-3 bg-gray-900/80 backdrop-blur border-b border-gray-800 z-40 ${step === 'intro' ? 'hidden' : ''}`}
+        className="flex-shrink-0 flex items-center justify-between bg-gray-900/80 backdrop-blur border-b border-gray-800 z-40"
         style={{ WebkitAppRegion: 'drag' }}
       >
-        <button
-          onClick={() => step !== 'shooting' && setStep('setup')}
-          className="flex items-center gap-2 text-pink-400 font-bold text-xl hover:text-pink-300 transition-colors"
-          style={{ WebkitAppRegion: 'no-drag' }}
-        >
-          <Camera size={22} />
-          PhotoBooth
-        </button>
+        {/* 왼쪽: 로고 버튼 (인트로에서는 숨김) */}
+        {step !== 'intro' ? (
+          <button
+            onClick={() => step !== 'shooting' && setStep('setup')}
+            className="flex items-center gap-2 text-pink-400 font-bold text-xl hover:text-pink-300 transition-colors pl-6 py-3 pr-4"
+            style={{ WebkitAppRegion: 'no-drag' }}
+          >
+            <Camera size={22} />
+            PhotoBooth
+          </button>
+        ) : (
+          <div className="flex-1" />
+        )}
 
-        {/* Step indicator */}
-        <StepIndicator current={step} />
+        {/* 가운데: 스텝 인디케이터 */}
+        {step !== 'intro' && <StepIndicator current={step} />}
 
-        <button
-          onClick={() => step !== 'shooting' && setStep('gallery')}
-          disabled={step === 'shooting'}
-          className="flex items-center gap-2 text-sm text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-          style={{ WebkitAppRegion: 'no-drag' }}
-        >
-          <Images size={18} />
-          앨범
-        </button>
+        {/* 오른쪽: 앨범 버튼 + 창 컨트롤 */}
+        <div className="flex items-center">
+          {step !== 'intro' && (
+            <button
+              onClick={() => step !== 'shooting' && setStep('gallery')}
+              disabled={step === 'shooting'}
+              className="flex items-center gap-2 text-sm text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors px-4 py-3"
+              style={{ WebkitAppRegion: 'no-drag' }}
+            >
+              <Images size={18} />
+              앨범
+            </button>
+          )}
+
+          {/* 최소화 */}
+          <button
+            onClick={() => window.electronAPI?.windowMinimize()}
+            className="w-10 h-9 flex items-center justify-center text-gray-500 hover:text-white hover:bg-gray-700/90 transition-colors"
+            style={{ WebkitAppRegion: 'no-drag' }}
+            title="최소화"
+          >
+            <Minus size={13} />
+          </button>
+
+          {/* 최대화 / 복원 */}
+          <button
+            onClick={() => window.electronAPI?.windowMaximize()}
+            className="w-10 h-9 flex items-center justify-center text-gray-500 hover:text-white hover:bg-gray-700/90 transition-colors"
+            style={{ WebkitAppRegion: 'no-drag' }}
+            title="최대화"
+          >
+            <Maximize2 size={12} />
+          </button>
+
+          {/* 닫기 */}
+          <button
+            onClick={() => window.electronAPI?.windowClose()}
+            className="w-10 h-9 flex items-center justify-center text-gray-500 hover:text-white hover:bg-red-600 transition-colors"
+            style={{ WebkitAppRegion: 'no-drag' }}
+            title="닫기"
+          >
+            <X size={13} />
+          </button>
+        </div>
       </header>
 
       {/* Main content area */}
@@ -243,45 +280,6 @@ const STEPS = [
   { id: 'share',    label: '공유' },
 ]
 
-// ─── Window Controls ─────────────────────────────────────────────────────────
-// frame: false 환경에서 항상 표시되는 커스텀 타이틀바 버튼
-// 헤더(pr-32) 와 겹치지 않도록 동일 높이(h-9 = 36px) + z-[9999]로 최상위 배치
-
-function WindowControls() {
-  return (
-    <div
-      className="fixed top-0 right-0 z-[9999] flex items-center"
-      style={{ WebkitAppRegion: 'no-drag' }}
-    >
-      {/* 최소화 */}
-      <button
-        onClick={() => window.electronAPI?.windowMinimize()}
-        className="w-10 h-9 flex items-center justify-center text-gray-500 hover:text-white hover:bg-gray-700/90 transition-colors"
-        title="최소화"
-      >
-        <Minus size={13} />
-      </button>
-
-      {/* 최대화 / 복원 */}
-      <button
-        onClick={() => window.electronAPI?.windowMaximize()}
-        className="w-10 h-9 flex items-center justify-center text-gray-500 hover:text-white hover:bg-gray-700/90 transition-colors"
-        title="최대화"
-      >
-        <Maximize2 size={12} />
-      </button>
-
-      {/* 닫기 */}
-      <button
-        onClick={() => window.electronAPI?.windowClose()}
-        className="w-10 h-9 flex items-center justify-center text-gray-500 hover:text-white hover:bg-red-600 transition-colors"
-        title="닫기"
-      >
-        <X size={13} />
-      </button>
-    </div>
-  )
-}
 
 function StepIndicator({ current }) {
   const idx = STEPS.findIndex(s => s.id === current)
